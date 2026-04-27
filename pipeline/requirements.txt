@@ -1,0 +1,6 @@
+gdeltdoc
+yfinance
+pandas
+numpy
+requests
+python-dateutil

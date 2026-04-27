@@ -1,0 +1,36 @@
+{
+  "total_examples": 537,
+  "historical": 364,
+  "live": 173,
+  "by_asset": {
+    "WTI": 167,
+    "ES": 117,
+    "NQ": 54,
+    "NKY": 26
+  },
+  "by_event_type": {
+    "geopolitical": 63,
+    "central_bank": 137,
+    "data_release": 44,
+    "commodity_supply": 63,
+    "risk_off": 37,
+    "other": 20
+  },
+  "by_bin": {
+    "0": 60,
+    "1": 31,
+    "2": 63,
+    "3": 80,
+    "4": 52,
+    "5": 10,
+    "6": 68
+  },
+  "by_region": {
+    "japan": 26,
+    "us": 338
+  },
+  "date_range": {
+    "start": "2025-12-28T21:00:00Z",
+    "end": "2026-03-20T13:45:00Z"
+  }
+}
