@@ -1,5 +1,6 @@
 import type { AgentName, AgentResult, AgentStatus, EventClassification, KeyContradiction } from '../types';
 import { AGENT_NAMES, AGENT_DISPLAY_NAMES } from '../types';
+import { extractText, postAnalyze } from './api';
 
 const SYSTEM_PROMPTS: Record<AgentName, (asset: string, timeframe: string) => string> = {
   momentum_trader: (asset, timeframe) =>
@@ -106,30 +107,24 @@ async function callAgent(
   timeframe: string,
   volatilityRegime: string,
   classification: EventClassification | null,
-  model: string = 'claude-sonnet-4-20250514'
+  model: string = 'claude-sonnet-5-5'
 ): Promise<AgentResult> {
-  const response = await fetch('/api/analyze', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    signal: AbortSignal.timeout(30_000),
-    body: JSON.stringify({
-      model,
-      system: SYSTEM_PROMPTS[agentName](asset, timeframe),
-      max_tokens: 512,
-      messages: [
-        {
-          role: 'user',
-          content: buildUserMessage(eventText, asset, timeframe, volatilityRegime, classification, agentName),
-        },
-      ],
-    }),
-  });
+  const response = await postAnalyze({
+    model,
+    system: SYSTEM_PROMPTS[agentName](asset, timeframe),
+    // Headroom for adaptive thinking, which counts toward max_tokens.
+    max_tokens: 2048,
+    messages: [
+      {
+        role: 'user',
+        content: buildUserMessage(eventText, asset, timeframe, volatilityRegime, classification, agentName),
+      },
+    ],
+  }, AbortSignal.timeout(30_000));
 
   if (!response.ok) throw new Error(`Agent ${agentName} failed: ${response.status}`);
 
-  const data = await response.json();
-  const text = data.content?.[0]?.text;
-  if (!text) throw new Error(`Agent ${agentName} returned empty response`);
+  const text = extractText(await response.json(), `Agent ${agentName}`);
 
   const cleaned = text.replace(/```json\n?|\n?```/g, '').trim();
   return JSON.parse(cleaned) as AgentResult;
@@ -156,23 +151,16 @@ Respond ONLY with a JSON object:
 
 Use null for key_contradiction if agents broadly agree (no meaningful split).`;
 
-  const response = await fetch('/api/analyze', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    signal: AbortSignal.timeout(30_000),
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 450,
-      system: 'You are a senior trading desk analyst. You receive the independent assessments of 9 specialist agents who have each analyzed the same news event from different perspectives. Your job is to synthesize their views into one clear, concise analytical paragraph that a discretionary trader can read in 5 seconds and understand the dominant narrative, key risks, and any notable disagreements. Also identify the single most important contradiction between any two agents. Be direct. No fluff. Write like you are talking to a professional trader.',
-      messages: [{ role: 'user', content: userContent }],
-    }),
-  });
+  const response = await postAnalyze({
+    model: 'claude-sonnet-5-5',
+    max_tokens: 2048,
+    system: 'You are a senior trading desk analyst. You receive the independent assessments of 9 specialist agents who have each analyzed the same news event from different perspectives. Your job is to synthesize their views into one clear, concise analytical paragraph that a discretionary trader can read in 5 seconds and understand the dominant narrative, key risks, and any notable disagreements. Also identify the single most important contradiction between any two agents. Be direct. No fluff. Write like you are talking to a professional trader.',
+    messages: [{ role: 'user', content: userContent }],
+  }, AbortSignal.timeout(30_000));
 
   if (!response.ok) throw new Error(`Synthesis failed: ${response.status}`);
 
-  const data = await response.json();
-  const text = data.content?.[0]?.text;
-  if (!text) throw new Error('Synthesis returned empty response');
+  const text = extractText(await response.json(), 'Synthesis');
 
   const cleaned = text.replace(/```json\n?|\n?```/g, '').trim();
   const parsed = JSON.parse(cleaned) as {
@@ -195,7 +183,7 @@ export async function runAgentSwarm(
   volatilityRegime: string,
   onUpdate: (name: AgentName, status: AgentStatus, result?: AgentResult) => void,
   classification: EventClassification | null = null,
-  model: string = 'claude-sonnet-4-20250514'
+  model: string = 'claude-sonnet-5-5'
 ): Promise<Record<AgentName, AgentResult | null>> {
   const results: Record<string, AgentResult | null> = {};
 

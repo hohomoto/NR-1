@@ -4,10 +4,10 @@ Pulls GDELT news events + Yahoo Finance prices → training_dataset.json
 No API keys required. Run from inside the pipeline/ directory.
 """
 
+import hashlib
 import json
 import os
 import time
-import uuid
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from xml.etree import ElementTree as ET
@@ -334,6 +334,36 @@ def assign_bin(move_pct: float) -> int:
     return 6
 
 
+# ─── Dedup helpers ────────────────────────────────────────────────────────────
+
+def example_id(prefix: str, asset: str, timestamp: str, title: str) -> str:
+    """Stable ID so re-running the pipeline produces the same IDs for the same articles."""
+    digest = hashlib.sha1(f"{asset}|{timestamp}|{title.strip().lower()}".encode('utf-8')).hexdigest()
+    return f"{prefix}_{digest[:12]}"
+
+
+def example_key(ex: dict) -> tuple:
+    """Content key for merging — also collapses duplicates written by older runs with random IDs."""
+    return (ex.get('asset'), ex.get('timestamp'), (ex.get('event_text') or '').strip().lower())
+
+
+def merge_examples(existing: list[dict], new: list[dict]) -> list[dict]:
+    """Existing rows first (keeps live outcomes as logged), then unseen new rows."""
+    seen: set[tuple] = set()
+    merged: list[dict] = []
+    for ex in existing + new:
+        key = example_key(ex)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(ex)
+    return merged
+
+
+def is_pipeline_example(ex: dict) -> bool:
+    return str(ex.get('source', '')).startswith(('gdelt', 'rss'))
+
+
 # ─── Step 5: Main pipeline ────────────────────────────────────────────────────
 
 def main() -> None:
@@ -425,9 +455,10 @@ def main() -> None:
         tone_val   = float(tone_raw) if tone_raw is not None else None
 
         id_prefix = ev.get('_id_prefix', 'gdelt')
+        timestamp = pub_date.isoformat() + 'Z'
         example: dict = {
-            'id':                f"{id_prefix}_{uuid.uuid4().hex[:12]}",
-            'timestamp':         pub_date.isoformat() + 'Z',
+            'id':                example_id(id_prefix, asset, timestamp, ev.get('title', '')),
+            'timestamp':         timestamp,
             'asset':             asset,
             'timeframe':         '1W',
             'timeframe_minutes': 10080,
@@ -480,21 +511,17 @@ def main() -> None:
         f.flush()
         os.fsync(f.fileno())
 
-    # Merge with existing live dataset, dedup by id
-    live_examples: list[dict] = []
+    # Merge with the existing dataset (live runs + earlier pipeline output), dedup by content
+    existing_examples: list[dict] = []
     if os.path.exists(live_path):
         try:
             with open(live_path) as f:
-                live_examples = json.load(f)
+                existing_examples = json.load(f)
         except Exception:
-            live_examples = []
+            existing_examples = []
 
-    seen_ids: set[str] = set()
-    merged:   list[dict] = []
-    for ex in live_examples + examples:
-        if ex['id'] not in seen_ids:
-            seen_ids.add(ex['id'])
-            merged.append(ex)
+    merged = merge_examples(existing_examples, examples)
+    live_count = sum(1 for e in merged if not is_pipeline_example(e))
 
     with open(live_path, 'w') as f:
         json.dump(merged, f, indent=2)
@@ -520,7 +547,7 @@ def main() -> None:
     summary = {
         'total_examples': len(merged),
         'historical':     len(examples),
-        'live':           len(live_examples),
+        'live':           live_count,
         'by_asset':       asset_counts,
         'by_event_type':  event_counts,
         'by_bin':         bin_counts,
@@ -544,7 +571,7 @@ def main() -> None:
     print(f"  → {live_path}")
     print(f"  → {summary_path}")
     print(f"\n  Historical: {len(examples)} examples")
-    print(f"  Merged with {len(live_examples)} live examples")
+    print(f"  Merged with {len(existing_examples)} existing examples ({live_count} live)")
     print(f"  Total dataset: {len(merged)} examples")
 
     # Bin distribution

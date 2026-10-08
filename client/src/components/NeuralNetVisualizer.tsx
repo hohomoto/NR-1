@@ -10,6 +10,15 @@ const LAYERS = [
 
 const BIN_LABELS = ['-3%+', '-2%', '-1%', 'Flat', '+1%', '+2%', '+3%+'];
 
+// Canvas geometry (CSS px). Nodes sit above a reserved band for the layer labels,
+// and the side padding fits the longest input ("SESSION") and output ("FLAT") labels.
+const CANVAS_HEIGHT = 168;
+const PAD_TOP       = 12;
+const LABEL_BAND    = 30;
+const PAD_LEFT      = 58;
+const PAD_RIGHT     = 40;
+const MONO          = 'JetBrains Mono, monospace';
+
 type Pulse   = { fl: number; fi: number; tl: number; ti: number; progress: number };
 type NodePos = { x: number; y: number };
 
@@ -52,7 +61,7 @@ export function NeuralNetVisualizer() {
     pulses:        [],
     nodePositions: [],
     width:         0,
-    height:        140,
+    height:        CANVAS_HEIGHT,
     idleFrame:     0,
     running:       false,
   });
@@ -69,15 +78,13 @@ export function NeuralNetVisualizer() {
     let animId = 0;
 
     function computeLayout(w: number) {
-      const padX = Math.min(52, Math.max(22, w * 0.28));
-      const padY = 20;
-      const uw = w - padX * 2;
-      const uh = 100;
+      const uw = Math.max(w - PAD_LEFT - PAD_RIGHT, 40);
+      const uh = CANVAS_HEIGHT - PAD_TOP - LABEL_BAND;
       S.current.nodePositions = LAYERS.map((layer, li) => {
-        const x = padX + (li / (LAYERS.length - 1)) * uw;
+        const x = PAD_LEFT + (li / (LAYERS.length - 1)) * uw;
         return Array.from({ length: layer.count }, (_, ni) => ({
           x,
-          y: padY + (ni / Math.max(layer.count - 1, 1)) * uh,
+          y: PAD_TOP + (ni / Math.max(layer.count - 1, 1)) * uh,
         }));
       });
       S.current.activations = LAYERS.map((l) => new Array(l.count).fill(0));
@@ -96,8 +103,8 @@ export function NeuralNetVisualizer() {
         from.forEach((fn, fi) => {
           to.forEach((tn, ti) => {
             const strength = activations[li][fi] * activations[li + 1][ti];
-            ctx.strokeStyle = `rgba(245,158,11,${0.03 + strength * 0.3})`;
-            ctx.lineWidth = 0.4 + strength * 1.8;
+            ctx.strokeStyle = `rgba(245,158,11,${0.06 + strength * 0.3})`;
+            ctx.lineWidth = 0.5 + strength * 1.6;
             ctx.beginPath();
             const cp1x = fn.x + (tn.x - fn.x) * 0.4;
             const cp2x = fn.x + (tn.x - fn.x) * 0.6;
@@ -115,14 +122,14 @@ export function NeuralNetVisualizer() {
         if (!fn || !tn) return;
         const pt = getBezierPoint(fn, tn, p.progress);
         ctx.beginPath();
-        ctx.arc(pt.x, pt.y, 2.5, 0, Math.PI * 2);
+        ctx.arc(pt.x, pt.y, 2, 0, Math.PI * 2);
         ctx.fillStyle = 'rgba(245,158,11,0.9)';
         ctx.fill();
       });
 
       // nodes + labels
       LAYERS.forEach((layer, li) => {
-        const r = li === 0 || li === LAYERS.length - 1 ? 8 : 6;
+        const r = li === 0 || li === LAYERS.length - 1 ? 5.5 : 4;
         nodePositions[li]?.forEach((pos, ni) => {
           const act = activations[li][ni];
 
@@ -134,25 +141,25 @@ export function NeuralNetVisualizer() {
           ctx.fill();
           ctx.strokeStyle = act > 0.05
             ? `rgba(245,158,11,${0.4 + act * 0.6})`
-            : '#1e1e24';
+            : '#2e2e38';
           ctx.lineWidth = 1;
           ctx.stroke();
 
           // input labels
           if (li === 0 && layer.nodeLabels) {
             ctx.textAlign = 'right';
-            ctx.fillStyle = act > 0.1 ? '#f59e0b' : '#333';
-            ctx.font = '9px JetBrains Mono, monospace';
-            ctx.fillText(layer.nodeLabels[ni] ?? '', pos.x - 12, pos.y + 3);
+            ctx.fillStyle = act > 0.1 ? '#f59e0b' : '#555';
+            ctx.font = `9px ${MONO}`;
+            ctx.fillText(layer.nodeLabels[ni] ?? '', pos.x - 10, pos.y + 3);
           }
 
           // output labels
           if (li === LAYERS.length - 1 && layer.nodeLabels) {
             const activeColor = ni < 3 ? '#ef4444' : ni === 3 ? '#3b82f6' : '#22c55e';
             ctx.textAlign = 'left';
-            ctx.fillStyle = act > 0.05 ? activeColor : '#2e2e38';
-            ctx.font = '9px JetBrains Mono, monospace';
-            ctx.fillText(layer.nodeLabels[ni] ?? '', pos.x + 12, pos.y + 3);
+            ctx.fillStyle = act > 0.05 ? activeColor : '#555';
+            ctx.font = `9px ${MONO}`;
+            ctx.fillText(layer.nodeLabels[ni] ?? '', pos.x + 10, pos.y + 3);
           }
         });
 
@@ -160,9 +167,9 @@ export function NeuralNetVisualizer() {
         const firstNode = nodePositions[li]?.[0];
         if (firstNode) {
           ctx.textAlign = 'center';
-          ctx.fillStyle = '#444';
-          ctx.font = '10px JetBrains Mono, monospace';
-          ctx.fillText(layer.label, firstNode.x, height - 8);
+          ctx.fillStyle = '#555';
+          ctx.font = `9px ${MONO}`;
+          ctx.fillText(layer.label, firstNode.x, height - 9);
         }
       });
     }
@@ -205,8 +212,11 @@ export function NeuralNetVisualizer() {
     const ro = new ResizeObserver((entries) => {
       S.current.width = entries[0].contentRect.width;
       if (S.current.width < 10) return;
-      canvas.width  = S.current.width;
-      canvas.height = S.current.height;
+      // Back the canvas with device pixels so text and circles stay sharp on Retina.
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width  = Math.round(S.current.width * dpr);
+      canvas.height = Math.round(S.current.height * dpr);
+      drawContext.setTransform(dpr, 0, 0, dpr, 0, 0);
       computeLayout(S.current.width);
       cancelAnimationFrame(animId);
       tick();
@@ -262,19 +272,24 @@ export function NeuralNetVisualizer() {
   return (
     <div style={{ padding: '12px 0 0' }}>
       {/* header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '8px' }}>
         <span style={{
           color: '#f59e0b',
           fontSize: '10px',
           letterSpacing: '0.12em',
-          fontFamily: 'JetBrains Mono, monospace',
+          fontFamily: MONO,
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
         }}>
-          NEURAL NETWORK · TFJS LAYER
+          NEURAL NET · TFJS
         </span>
         <span style={{
-          fontSize: '10px',
-          fontFamily: 'JetBrains Mono, monospace',
-          color: nnWeightSource === 'trained' ? '#22c55e' : '#444',
+          fontSize: '9px',
+          letterSpacing: '0.08em',
+          fontFamily: MONO,
+          flexShrink: 0,
+          color: nnWeightSource === 'trained' ? '#22c55e' : '#555',
         }}>
           {nnWeightSource === 'trained' ? 'TRAINED' : 'SYNTHETIC'}
         </span>
@@ -282,44 +297,47 @@ export function NeuralNetVisualizer() {
 
       {/* canvas wrapper — ResizeObserver reads this div's width */}
       <div ref={wrapperRef} style={{ width: '100%' }}>
-        <canvas ref={canvasRef} style={{ display: 'block', width: '100%' }} />
+        <canvas ref={canvasRef} style={{ display: 'block', width: '100%', height: CANVAS_HEIGHT }} />
       </div>
 
       {/* output probability bins */}
       <div style={{
         display: 'grid',
-        gridTemplateColumns: 'repeat(7, 1fr)',
-        gap: '3px',
-        marginTop: '8px',
+        gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
+        gap: '2px',
+        marginTop: '6px',
       }}>
         {BIN_LABELS.map((label, i) => (
           <div key={i} style={{
             background: '#111114',
             border: `1px solid ${nnOutput && i === peakBin ? '#f59e0b' : '#1e1e24'}`,
-            padding: '5px 3px',
+            padding: '4px 0',
             textAlign: 'center',
+            minWidth: 0,
+            overflow: 'hidden',
+            whiteSpace: 'nowrap',
           }}>
             <span style={{
               display: 'block',
-              fontSize: '9px',
-              color: '#333',
-              marginBottom: '3px',
-              fontFamily: 'JetBrains Mono, monospace',
+              fontSize: '8px',
+              color: '#555',
+              marginBottom: '2px',
+              fontFamily: MONO,
             }}>
               {label}
             </span>
             <span style={{
               display: 'block',
-              fontSize: '11px',
-              fontFamily: 'JetBrains Mono, monospace',
+              fontSize: '10px',
+              fontFamily: MONO,
               color: nnOutput && i === peakBin
                 ? '#f59e0b'
                 : i < 3 ? '#ef4444'
                 : i === 3 ? '#3b82f6'
                 : '#22c55e',
-              opacity: nnOutput ? 1 : 0.3,
+              opacity: nnOutput ? 1 : 0.35,
             }}>
-              {nnOutput ? (nnOutput[i] * 100).toFixed(1) + '%' : '0%'}
+              {nnOutput ? `${Math.round(nnOutput[i] * 100)}%` : '–'}
             </span>
           </div>
         ))}
@@ -329,12 +347,13 @@ export function NeuralNetVisualizer() {
       <div style={{
         marginTop: '6px',
         fontSize: '9px',
-        fontFamily: 'JetBrains Mono, monospace',
-        color: nnWeightSource === 'trained' ? '#14532d' : '#444',
+        letterSpacing: '0.04em',
+        fontFamily: MONO,
+        color: nnWeightSource === 'trained' ? 'rgba(34,197,94,0.7)' : '#555',
       }}>
         {nnWeightSource === 'synthetic'
-          ? 'SYNTHETIC WEIGHTS V1'
-          : `TRAINED · ${nnTrainedExamples} EXAMPLES`}
+          ? 'UNTRAINED · RANDOM WEIGHTS'
+          : `TRAINED ON ${nnTrainedExamples} EXAMPLES`}
       </div>
     </div>
   );

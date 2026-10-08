@@ -4,6 +4,7 @@ const BIN_LABELS = ['-3%+', '-2%', '-1%', 'Flat', '+1%', '+2%', '+3%+'];
 
 export function ProbabilityHistogram() {
   const nnOutput = useNR1Store((s) => s.nnOutput);
+  const nnWeightSource = useNR1Store((s) => s.nnWeightSource);
 
   if (!nnOutput) {
     return (
@@ -92,7 +93,7 @@ export function ProbabilityHistogram() {
           <span className="text-text-primary">{(maxVal * 100).toFixed(1)}%</span>
         </div>
         <div className="text-xs font-mono text-text-dim">
-          TensorFlow.js · synthetic weights v1
+          TensorFlow.js · {nnWeightSource} weights
         </div>
       </div>
     </div>

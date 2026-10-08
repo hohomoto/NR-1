@@ -45,18 +45,21 @@ function quarterlyFront(): string {
   return `${year + 1}03`; // roll to March next year
 }
 
-const FM  = monthlyFront();
-const FMQ = quarterlyFront();
-
-const CONTRACT_MAP: Record<string, Contract> = {
-  'NQ':      { symbol: 'NQ',    secType: SecType.FUT,  currency: 'USD', exchange: 'CME',      lastTradeDateOrContractMonth: FMQ },
-  'ES':      { symbol: 'ES',    secType: SecType.FUT,  currency: 'USD', exchange: 'CME',      lastTradeDateOrContractMonth: FMQ },
-  'WTI':     { symbol: 'CL',    secType: SecType.FUT,  currency: 'USD', exchange: 'NYMEX',    lastTradeDateOrContractMonth: FM  },
-  'NKY':     { symbol: 'NKY',   secType: SecType.IND,  currency: 'JPY', exchange: 'OSE' },
-  'TOPIX':   { symbol: 'TOPIX', secType: SecType.IND,  currency: 'JPY', exchange: 'TSE' },
-  'EWJ':     { symbol: 'EWJ',   secType: SecType.STK,  currency: 'USD', exchange: 'ARCA' },
-  'USD/JPY': { symbol: 'USD',   secType: SecType.CASH, currency: 'JPY', exchange: 'IDEALPRO' },
-};
+// Built per request so a long-running server rolls to the next contract month.
+function contractFor(asset: string): Contract | undefined {
+  const FM  = monthlyFront();
+  const FMQ = quarterlyFront();
+  const CONTRACT_MAP: Record<string, Contract> = {
+    'NQ':      { symbol: 'NQ',    secType: SecType.FUT,  currency: 'USD', exchange: 'CME',      lastTradeDateOrContractMonth: FMQ },
+    'ES':      { symbol: 'ES',    secType: SecType.FUT,  currency: 'USD', exchange: 'CME',      lastTradeDateOrContractMonth: FMQ },
+    'WTI':     { symbol: 'CL',    secType: SecType.FUT,  currency: 'USD', exchange: 'NYMEX',    lastTradeDateOrContractMonth: FM  },
+    'NKY':     { symbol: 'NKY',   secType: SecType.IND,  currency: 'JPY', exchange: 'OSE' },
+    'TOPIX':   { symbol: 'TOPIX', secType: SecType.IND,  currency: 'JPY', exchange: 'TSE' },
+    'EWJ':     { symbol: 'EWJ',   secType: SecType.STK,  currency: 'USD', exchange: 'ARCA' },
+    'USD/JPY': { symbol: 'USD',   secType: SecType.CASH, currency: 'JPY', exchange: 'IDEALPRO' },
+  };
+  return CONTRACT_MAP[asset];
+}
 
 class IBGatewayService {
   private api: IBApi | null = null;
@@ -107,6 +110,11 @@ class IBGatewayService {
         clearTimeout(timer);
         this.api = api;
         this.connected = true;
+        api.on(EventName.disconnected, () => {
+          console.log('[IB] Disconnected');
+          this.connected = false;
+          this.api = null;
+        });
         // Post-connection error logger — filter informational codes
         api.on(EventName.error, (reqId: unknown, code: unknown, msg: unknown) => {
           const c = typeof code === 'number' ? code : -1;
@@ -142,7 +150,7 @@ class IBGatewayService {
   }
 
   getPrice(asset: string): Promise<PriceData> {
-    const contract = CONTRACT_MAP[asset];
+    const contract = contractFor(asset);
     console.log(`[IB] getPrice: ${asset} →`, JSON.stringify(contract));
     const api = this.api;
     if (!contract || !api || !this.connected) {
@@ -233,11 +241,3 @@ class IBGatewayService {
 }
 
 export const ibGateway = new IBGatewayService();
-
-// Connect on startup (non-blocking)
-ibGateway.connect().catch(() => {});
-
-// Disconnect on exit
-process.on('exit', () => ibGateway.disconnect());
-process.on('SIGINT', () => { ibGateway.disconnect(); process.exit(0); });
-process.on('SIGTERM', () => { ibGateway.disconnect(); process.exit(0); });

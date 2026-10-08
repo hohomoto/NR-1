@@ -8,6 +8,7 @@ import { NewsPanel } from './components/NewsPanel';
 import { SignalPanel } from './components/SignalPanel';
 import { ProbabilityHistogram } from './components/ProbabilityHistogram';
 import { ConsensusBreakdown } from './components/ConsensusBreakdown';
+import { AccessGate } from './components/AccessGate';
 import { useNR1Store } from './store/useNR1Store';
 import { ALL_ASSETS } from './types';
 
@@ -20,6 +21,11 @@ export default function App() {
   const setAsset     = useNR1Store((s) => s.setAsset);
   const fetchNews    = useNR1Store((s) => s.fetchNews);
   const isJapanAsset = useNR1Store((s) => s.isJapanAsset);
+  const loadServerConfig = useNR1Store((s) => s.loadServerConfig);
+
+  useEffect(() => {
+    loadServerConfig();
+  }, [loadServerConfig]);
 
   // Kick off news polling on mount
   useEffect(() => {
@@ -53,6 +59,7 @@ export default function App() {
 
   return (
     <div className="h-screen w-screen bg-background text-text-primary flex flex-col overflow-hidden">
+      <AccessGate />
       <TopBar />
       <div className="flex flex-1 overflow-hidden">
         <SessionSidebar />

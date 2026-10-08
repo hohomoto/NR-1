@@ -52,7 +52,7 @@ Takes **5–15 minutes** depending on network speed. Yahoo Finance requests are 
 
 ## Re-running
 
-Safe to run multiple times. New examples are merged by ID, never duplicated.
+Safe to run multiple times. Examples get stable IDs and are merged by content (asset, timestamp, headline), so re-fetched articles are never duplicated — this also collapses duplicates left by older runs.
 
 ---
 

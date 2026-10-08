@@ -29,13 +29,15 @@ import { runOpusEscalation } from '../lib/opusEscalation';
 import {
   runNN,
   getNNWeightSource,
+  getNNTrainedExamples,
   checkAndRetrain,
-  inferEventType,
+  encodeEventType,
   getCurrentSession,
   getDayOfWeek,
   ASSET_ENCODING,
 } from '../lib/nnLayer';
 import { aggregateSignal } from '../lib/signalAggregator';
+import { getAccessCode, setAccessCode, setAccessDeniedHandler, verifyAccessCode } from '../lib/api';
 
 interface NR1State {
   eventText: string;
@@ -78,6 +80,12 @@ interface NR1State {
 
   isRunning: boolean;
 
+  // ── Deployment / access ────────────────────────────────────────────────────
+  serverConfigLoaded: boolean;
+  accessRequired: boolean;
+  accessGranted: boolean;
+  analyzeConfigured: boolean;
+
   // ── Japan Intel ────────────────────────────────────────────────────────────
   isJapanAsset: boolean;
   carryTradeRisk: CarryTradeRisk;
@@ -103,6 +111,8 @@ interface NR1State {
   runAnalysis: () => Promise<void>;
   clearRun: () => void;
   loadHistoryEntry: (id: string) => void;
+  loadServerConfig: () => Promise<void>;
+  submitAccessCode: (code: string) => Promise<boolean>;
   // Japan Intel actions
   setCarryTradeRisk: (risk: CarryTradeRisk) => void;
   setUsdJpyPrice: (price: number | null) => void;
@@ -164,6 +174,11 @@ export const useNR1Store = create<NR1State>()(
 
       isRunning: false,
 
+      serverConfigLoaded: false,
+      accessRequired: false,
+      accessGranted: false,
+      analyzeConfigured: true,
+
       // ── Japan Intel initial state ─────────────────────────────────────────
       isJapanAsset: false,
       carryTradeRisk: 'unknown' as CarryTradeRisk,
@@ -190,6 +205,32 @@ export const useNR1Store = create<NR1State>()(
         set({ vixValue: value, vixTimestamp: timestamp, vixStale: stale }),
       setNNStatus: (source, examples) =>
         set({ nnWeightSource: source, nnTrainedExamples: examples }),
+
+      loadServerConfig: async () => {
+        setAccessDeniedHandler(() => set({ accessGranted: false }));
+        try {
+          const res = await fetch('/api/config');
+          if (!res.ok) return;
+          const cfg = await res.json() as { accessRequired: boolean; analyzeConfigured: boolean };
+          // A previously saved code is verified lazily: the first 401 re-opens the gate.
+          const saved = cfg.accessRequired ? getAccessCode() : null;
+          set({
+            serverConfigLoaded: true,
+            accessRequired: cfg.accessRequired,
+            accessGranted: !cfg.accessRequired || Boolean(saved),
+            analyzeConfigured: cfg.analyzeConfigured,
+          });
+        } catch { /* server unreachable — leave defaults */ }
+      },
+
+      submitAccessCode: async (code) => {
+        const ok = await verifyAccessCode(code).catch(() => false);
+        if (ok) {
+          setAccessCode(code);
+          set({ accessGranted: true });
+        }
+        return ok;
+      },
 
       fetchNews: async () => {
         try {
@@ -251,8 +292,9 @@ export const useNR1Store = create<NR1State>()(
       },
 
       runAnalysis: async () => {
-        const { eventText, asset, timeframe, volatilityRegime } = get();
+        const { eventText, asset, timeframe, volatilityRegime, accessRequired, accessGranted, analyzeConfigured } = get();
         if (!eventText.trim()) return;
+        if (!analyzeConfigured || (accessRequired && !accessGranted)) return;
 
         set({
           isRunning: true,
@@ -290,10 +332,17 @@ export const useNR1Store = create<NR1State>()(
           () => { set({ patternStatus: 'error' }); return null; }
         );
 
-        const nnPromise = runNN(eventText, asset, volatilityRegime).then((output) => {
-          set({ nnOutput: output, nnWeightSource: getNNWeightSource() });
-          return output;
-        });
+        const nnPromise = runNN(eventText, asset, volatilityRegime, classification).then(
+          (output) => {
+            set({ nnOutput: output, nnWeightSource: getNNWeightSource(), nnTrainedExamples: getNNTrainedExamples() });
+            return output;
+          },
+          (err) => {
+            // A failed prediction must not block the rest of the run.
+            console.error('NR-1: NN prediction failed:', err);
+            return null;
+          }
+        );
 
         // Step 3: Agent swarm with classification context
         await runAgentSwarm(
@@ -317,31 +366,40 @@ export const useNR1Store = create<NR1State>()(
         let finalResults = currentResults;
         let didEscalate = false;
 
-        // Step 4: Opus escalation if split
+        // Step 4: Opus escalation if split — same 2/3 rule as the aggregator,
+        // counting neutral votes so a neutral consensus doesn't trigger a re-run.
         if (completedResults.length >= 7) {
           const dirs = completedResults.map((r) => r.direction);
-          const bullish = dirs.filter((d) => d === 'bullish').length;
-          const bearish = dirs.filter((d) => d === 'bearish').length;
-          const majorityCount = Math.max(bullish, bearish);
+          const majorityCount = Math.max(
+            ...(['bullish', 'bearish', 'neutral'] as const).map((d) => dirs.filter((x) => x === d).length)
+          );
           const total = completedResults.length;
 
           if (majorityCount < Math.ceil((total * 2) / 3)) {
             set({ escalationInProgress: true });
-            try {
-              const opusResults = await runOpusEscalation(
-                eventText, asset, timeframe, volatilityRegime,
-                (agentName, status, result) => {
-                  set((state) => ({
-                    agentStatus: { ...state.agentStatus, [agentName]: status },
-                    agentResults: result
-                      ? { ...state.agentResults, [agentName]: result }
-                      : state.agentResults,
-                  }));
-                }
-              );
-              finalResults = opusResults;
-              didEscalate = true;
-            } catch { /* use original */ }
+            const opusResults = await runOpusEscalation(
+              eventText, asset, timeframe, volatilityRegime,
+              (agentName, status, result) => {
+                set((state) => ({
+                  agentStatus: {
+                    ...state.agentStatus,
+                    // Keep the Sonnet answer visible if the Opus call fails.
+                    [agentName]: status === 'error' && state.agentResults[agentName] ? 'complete' : status,
+                  },
+                  agentResults: result
+                    ? { ...state.agentResults, [agentName]: result }
+                    : state.agentResults,
+                }));
+              },
+              classification
+            );
+            // Opus answers replace Sonnet ones agent by agent; failures keep the original.
+            const merged = { ...currentResults };
+            for (const name of AGENT_NAMES) {
+              if (opusResults[name]) merged[name] = opusResults[name];
+            }
+            didEscalate = AGENT_NAMES.some((name) => opusResults[name] !== null);
+            finalResults = merged;
             set({ escalationInProgress: false, didEscalate });
           }
         }
@@ -402,7 +460,7 @@ export const useNR1Store = create<NR1State>()(
               timeframe_minutes: TF_MINUTES[timeframe] ?? 10080,
               volatility_regime: volatilityRegime,
               event_text: eventText,
-              event_type_encoded: inferEventType(eventText),
+              event_type_encoded: encodeEventType(classification, eventText),
               asset_encoded: ASSET_ENCODING[asset] ?? 0,
               session: getCurrentSession(),
               day_of_week: getDayOfWeek(),

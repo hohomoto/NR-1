@@ -1,4 +1,4 @@
-import type { AgentName, AgentResult, AgentStatus } from '../types';
+import type { AgentName, AgentResult, AgentStatus, EventClassification } from '../types';
 import { runAgentSwarm } from './agentSwarm';
 
 export async function runOpusEscalation(
@@ -6,7 +6,8 @@ export async function runOpusEscalation(
   asset: string,
   timeframe: string,
   volatilityRegime: string,
-  onUpdate: (name: AgentName, status: AgentStatus, result?: AgentResult) => void
+  onUpdate: (name: AgentName, status: AgentStatus, result?: AgentResult) => void,
+  classification: EventClassification | null
 ): Promise<Record<AgentName, AgentResult | null>> {
   return runAgentSwarm(
     eventText,
@@ -14,7 +15,7 @@ export async function runOpusEscalation(
     timeframe,
     volatilityRegime,
     onUpdate,
-    null,
+    classification,
     'claude-opus-4-5'
   );
 }

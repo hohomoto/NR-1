@@ -23,10 +23,14 @@ export function SessionSidebar() {
     fetchStats();
   }, [analysisComplete]); // refresh after each run completes
 
+  // Retraining happens once 50 new labels exist beyond what the current weights saw
+  // (or at the first 50 when still untrained).
   const MILESTONE = 50;
-  const progressPct = stats.withOutcomes === 0
-    ? 0
-    : Math.min((stats.withOutcomes % MILESTONE || MILESTONE) / MILESTONE * 100, 100);
+  const newLabels = nnWeightSource === 'trained'
+    ? Math.max(stats.withOutcomes - nnTrainedExamples, 0)
+    : stats.withOutcomes;
+  const towardNext = Math.min(newLabels, MILESTONE);
+  const progressPct = towardNext / MILESTONE * 100;
 
   const directionColor = (dir: string | undefined) => {
     if (dir === 'bullish') return 'bg-green';
@@ -132,7 +136,7 @@ export function SessionSidebar() {
         <div className="mt-2">
           <div className="flex justify-between text-[9px] font-mono text-text-dim mb-1">
             <span>next retrain</span>
-            <span>{stats.withOutcomes % MILESTONE}/{MILESTONE}</span>
+            <span>{towardNext}/{MILESTONE}</span>
           </div>
           <div className="w-full h-px bg-border-bright rounded-full overflow-hidden">
             <div
